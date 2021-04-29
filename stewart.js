@@ -9,11 +9,11 @@
 (function(root) {
 
   function getHexPlate(r_i, r_o, rot) {
-    var ret = [];
-    var a_2 = (2 * r_i - r_o) / Math.sqrt(3);
-    for (var i = 0; i < 6; i++) {
-      var phi = (i - i % 2) / 3 * Math.PI + rot;
-      var ap = a_2 * Math.pow(-1, i);
+    let ret = [];
+    let a_2 = (2 * r_i - r_o) / Math.sqrt(3);
+    for (let i = 0; i < 6; i++) {
+      let phi = (i - i % 2) / 3 * Math.PI + rot;
+      let ap = a_2 * Math.pow(-1, i);
 
       ret.push({
         x: r_o * Math.cos(phi) + ap * Math.sin(phi),
@@ -797,6 +797,8 @@
     drawBasePlate: null,
     drawPlatformPlate: null,
 
+    armLength: 0,
+
     rodLength: 0,
     hornLength: 0,
     hornDirection: 0,
@@ -808,6 +810,8 @@
     B: [], // base joints in base frame
     P: [], // platform joints in platform frame
 
+    a: [], // Prismatic arm ends in base frame
+
     q: [], // vector from base origin to Pk
     l: [], // vector from B to P
     H: [], // servo horn end to mount the rod
@@ -815,6 +819,7 @@
     T0: [], // Initial offset
 
     init: function(opts) {
+      this.armLength = opts.armLength;
 
       this.rodLength = opts.rodLength;
       this.hornLength = opts.hornLength;
@@ -826,6 +831,7 @@
 
       this.B = [];
       this.P = [];
+      this.a = [];
       this.q = [];
       this.l = [];
       this.H = [];
@@ -839,6 +845,7 @@
         this.P.push(legs[i].platformJoint);
         this.sinBeta.push(Math.sin(legs[i].motorRotation));
         this.cosBeta.push(Math.cos(legs[i].motorRotation));
+        this.a.push([0, 0, 0]);
         this.q.push([0, 0, 0]);
         this.l.push([0, 0, 0]);
         this.H.push([0, 0, 0]);
@@ -866,6 +873,7 @@
       var anchorDistance = (opts.anchorDistance || 20) / baseRadius;
 
       var rodLength = opts.rodLength || 130;
+      var armLength = opts.armLength || 80;
 
       var hornLength = opts.hornLength || 50;
       var hornDirection = opts.hornDirection || 0;
@@ -874,6 +882,7 @@
       var servoRangeVisible = opts.servoRangeVisible === undefined ? false : opts.servoRangeVisible;
 
       this.init({
+        armLength: armLength,
         rodLength: rodLength,
         hornLength: hornLength,
         hornDirection: hornDirection,
@@ -923,6 +932,7 @@
       var platformRadiusOuter = opts.platformRadiusOuter || 80; // 8cm
       var platformTurn = opts.platformTurn === undefined ? true : opts.platformTurn;
 
+      var armLength = opts.ArmLength || 160;
       var rodLength = opts.rodLength || 130;
 
       var hornLength = opts.hornLength || 50;
@@ -938,6 +948,7 @@
       var servoRangeVisible = opts.servoRangeVisible === undefined ? false : opts.servoRangeVisible;
 
       this.init({
+        armLength: armLength,
         rodLength: rodLength,
         hornLength: hornLength,
         hornDirection: hornDirection,
@@ -1132,19 +1143,29 @@
           p.sphere(3);
           p.pop();
 
-          // A -> q rods
-          p.push();
-          p.stroke(255, 0, 0);
-          p.strokeWeight(1);
-          p.line(this.H[i][0], this.H[i][1], this.H[i][2], this.q[i][0], this.q[i][1], this.q[i][2]);
-          //p.pop();
-
-          // Base -> A rods
-          //p.push();
-          p.stroke(0);
+          // // A -> q rods
+          // p.push();
+          // p.stroke(255, 0, 0);
           // p.strokeWeight(1);
-          p.line(this.B[i][0], this.B[i][1], this.B[i][2], this.H[i][0], this.H[i][1], this.H[i][2]);
-          p.pop();
+          // p.line(this.H[i][0], this.H[i][1], this.H[i][2], this.q[i][0], this.q[i][1], this.q[i][2]);
+          // //p.pop();
+          //
+          // // Base -> A rods
+          // //p.push();
+          // p.stroke(0);
+          // // p.strokeWeight(1);
+          // p.line(this.B[i][0], this.B[i][1], this.B[i][2], this.H[i][0], this.H[i][1], this.H[i][2]);
+          // p.pop();
+
+          // a -> q lines
+          let li = this.l[i];
+          let isArmValid = Math.sqrt(li[0]**2 + li[1]**2 + li[2]**2) < this.armLength;
+          if (isArmValid) {
+            p.stroke(0, 0, 255);
+          } else {
+            p.stroke(255, 0, 0);
+          }
+          p.line(...this.a[i], ...this.q[i]);
 
           if (this.servoRangeVisible) {
             p.push();
@@ -1163,9 +1184,11 @@
 
     update: function(translation, orientation) {
 
+      var armLength = this.armLength;
       var hornLength = this.hornLength;
       var rodLength = this.rodLength;
 
+      var a = this.a;
       var q = this.q;
       var l = this.l;
       var B = this.B;
@@ -1181,6 +1204,7 @@
 
         var o = orientation.rotateVector(P[i]);
 
+        var ai = a[i];
         var li = l[i];
         var qi = q[i];
         var Hi = H[i];
@@ -1190,19 +1214,27 @@
         qi[1] = translation[1] + o[1];
         qi[2] = translation[2] + o[2] + z;
 
+        // base -> platform
         li[0] = qi[0] - Bi[0];
         li[1] = qi[1] - Bi[1];
         li[2] = qi[2] - Bi[2];
 
-        var gk = li[0] * li[0] + li[1] * li[1] + li[2] * li[2] - rodLength * rodLength + hornLength * hornLength;
-        var ek = 2 * hornLength * li[2];
-        var fk = 2 * hornLength * (this.cosBeta[i] * li[0] + this.sinBeta[i] * li[1]);
+        // position armLength away from platform, along li
+        let armDist = Math.sqrt(li[0]**2 + li[1]**2 + li[2]**2);
+        let liUnit = [li[0]/armDist, li[1]/armDist, li[2]/armDist];
+        ai[0] = qi[0] - liUnit[0] * armLength;
+        ai[1] = qi[1] - liUnit[1] * armLength;
+        ai[2] = qi[2] - liUnit[2] * armLength;
 
-        var sqSum = ek * ek + fk * fk;
-        var sqrt1 = Math.sqrt(1 - gk * gk / sqSum);
-        var sqrt2 = Math.sqrt(sqSum);
-        var sinAlpha = (gk * ek) / sqSum - (fk * sqrt1) / sqrt2;
-        var cosAlpha = (gk * fk) / sqSum + (ek * sqrt1) / sqrt2;
+        let gk = li[0] * li[0] + li[1] * li[1] + li[2] * li[2] - rodLength * rodLength + hornLength * hornLength;
+        let ek = 2 * hornLength * li[2];
+        let fk = 2 * hornLength * (this.cosBeta[i] * li[0] + this.sinBeta[i] * li[1]);
+
+        let sqSum = ek * ek + fk * fk;
+        let sqrt1 = Math.sqrt(1 - gk * gk / sqSum);
+        let sqrt2 = Math.sqrt(sqSum);
+        let sinAlpha = (gk * ek) / sqSum - (fk * sqrt1) / sqrt2;
+        let cosAlpha = (gk * fk) / sqSum + (ek * sqrt1) / sqrt2;
 
         Hi[0] = Bi[0] + hornLength * cosAlpha * this.cosBeta[i];
         Hi[1] = Bi[1] + hornLength * cosAlpha * this.sinBeta[i];
@@ -1212,8 +1244,8 @@
 
     getServoAngles: function() {
 
-      var ret = [];
-      for (var i = 0; i < this.B.length; i++) {
+      let ret = [];
+      for (let i = 0; i < this.B.length; i++) {
         ret[i] = Math.asin((this.H[i][2] - this.B[i][2]) / this.hornLength);
         if (isNaN(ret[i])) {
           // Rod too short
